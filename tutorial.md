@@ -30,50 +30,67 @@ uv pip install --python .venv/bin/python -e . -r requirements-sonic.txt
 
 The SONIC path is independent of the repository's legacy robomimic environment.
 
-## Train
+## Full training
 
-Set one config and output directory:
-
-```bash
-CONFIG=configs/sonic_notactile.json  # or sonic_htd.json / sonic_jepa.json
-OUTPUT=outputs/sonic_notactile
-```
-
-Single GPU:
+The measured four-A800 setting uses batch 32 per GPU, global batch 128, four workers per
+rank, BF16, 20k optimizer steps, and one retained checkpoint. Batch 64 per GPU is slower
+because video decoding becomes the bottleneck.
 
 ```bash
-CUDA_VISIBLE_DEVICES=2 .venv/bin/python -m diffusion_policy.sonic.train \
-  --config "$CONFIG" \
+cd /root/Projects/diffusion_policy
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+
+.venv/bin/torchrun --nproc_per_node=4 --master_port=29511 \
+  -m diffusion_policy.sonic.train \
+  --config configs/sonic_notactile.json \
   --dataset-path /root/Projects/data/carry-bucket-stereo \
-  --output-dir "$OUTPUT" \
-  --batch-size 8 \
+  --output-dir outputs/sonic_notactile \
+  --batch-size 32 \
+  --gradient-accumulation-steps 1 \
+  --num-workers 4 \
   --max-steps 20000 \
   --save-every 1000 \
   --save-total-limit 1 \
   --bf16 \
-  --use-wandb
-```
+  --use-wandb \
+  --wandb-project univlat \
+  --run-name dp-sonic-notactile
 
-Two GPUs, only after GPUs 2 and 3 are idle:
-
-```bash
-CUDA_VISIBLE_DEVICES=2,3 .venv/bin/torchrun --nproc_per_node=2 --master_port=29503 \
+.venv/bin/torchrun --nproc_per_node=4 --master_port=29512 \
   -m diffusion_policy.sonic.train \
-  --config "$CONFIG" \
+  --config configs/sonic_htd.json \
   --dataset-path /root/Projects/data/carry-bucket-stereo \
-  --output-dir "$OUTPUT" \
-  --batch-size 4 \
-  --gradient-accumulation-steps 4 \
+  --output-dir outputs/sonic_htd \
+  --batch-size 32 \
+  --gradient-accumulation-steps 1 \
+  --num-workers 4 \
   --max-steps 20000 \
+  --save-every 1000 \
+  --save-total-limit 1 \
   --bf16 \
-  --use-wandb
+  --use-wandb \
+  --wandb-project univlat \
+  --run-name dp-sonic-htd
+
+.venv/bin/torchrun --nproc_per_node=4 --master_port=29513 \
+  -m diffusion_policy.sonic.train \
+  --config configs/sonic_jepa.json \
+  --dataset-path /root/Projects/data/carry-bucket-stereo \
+  --output-dir outputs/sonic_jepa \
+  --batch-size 32 \
+  --gradient-accumulation-steps 1 \
+  --num-workers 4 \
+  --max-steps 20000 \
+  --save-every 1000 \
+  --save-total-limit 1 \
+  --bf16 \
+  --use-wandb \
+  --wandb-project univlat \
+  --run-name dp-sonic-jepa
 ```
 
-`--batch-size` is per GPU. The second command has global batch size
-`4 x 2 x 4 = 32`. The deployable checkpoint is `$OUTPUT/latest.pt`.
-
-For a CPU dependency/data-path check, use `--device cpu --batch-size 1
---num-workers 0 --max-steps 1` with a config whose model fits the host.
+`--batch-size` is per GPU. Each command has global batch size `32 x 4 = 128`; the
+deployable checkpoint is `outputs/sonic_<mode>/latest.pt`.
 
 ## Serve And Bridge
 
