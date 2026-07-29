@@ -1,0 +1,8 @@
+{
+  "mode": "notactile",
+  "image_height": 128,
+  "image_width": 128,
+  "action_horizon": 40,
+  "num_diffusion_steps": 100,
+  "num_inference_steps": 10
+}

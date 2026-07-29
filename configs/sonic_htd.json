@@ -1,0 +1,9 @@
+{
+  "mode": "htd",
+  "image_height": 128,
+  "image_width": 128,
+  "action_horizon": 40,
+  "dream_horizon": 4,
+  "num_diffusion_steps": 100,
+  "num_inference_steps": 10
+}
