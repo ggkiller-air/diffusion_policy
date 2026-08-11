@@ -33,8 +33,8 @@ def make_batch(mode: TactileMode) -> dict[str, torch.Tensor]:
         "actions": torch.randn(1, 40, 78),
     }
     if mode.uses_tactile:
-        batch["tactile"] = torch.zeros(1, 256, dtype=torch.uint8)
-        batch["future_tactile"] = torch.zeros(1, 4, 256, dtype=torch.uint8)
+        batch["tactile"] = torch.zeros(1, 768, dtype=torch.uint8)
+        batch["future_tactile"] = torch.zeros(1, 4, 768, dtype=torch.uint8)
     if mode.dreams_state_and_vision:
         batch["future_state"] = torch.randn(1, 4, 46)
         batch["future_images"] = torch.rand(1, 4, 2, 3, 16, 16)
@@ -105,7 +105,7 @@ def test_wire_validation_is_strict():
     validate_observation(observation, requires_tactile=False)
     with pytest.raises(ValueError, match="requires tactile"):
         validate_observation(observation, requires_tactile=True)
-    observation["tactile"] = np.zeros(256, dtype=np.uint8)
+    observation["tactile"] = np.zeros(768, dtype=np.uint8)
     validate_observation(observation, requires_tactile=True)
 
 

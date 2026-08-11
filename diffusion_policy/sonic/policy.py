@@ -240,7 +240,9 @@ class SonicDiffusionPolicy(nn.Module):
                     horizon,
                     self.config.tactile_dim,
                 ):
-                    raise ValueError("HTD/JEPA requires future_tactile [B, H, 256]")
+                    raise ValueError(
+                        f"HTD/JEPA requires future_tactile [B, H, {self.config.tactile_dim}]"
+                    )
                 tactile_target = self.teacher_tactile_encoder(
                     future_tactile.float()
                     .div(255.0)

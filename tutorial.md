@@ -23,7 +23,7 @@ observations only.
 ## Environment
 
 ```bash
-cd /root/Projects/diffusion_policy
+cd /home/wzh/Projects/Uni_VLaT/diffusion_policy
 uv venv --python 3.11
 uv pip install --python .venv/bin/python -e . -r requirements-sonic.txt
 ```
@@ -37,13 +37,13 @@ rank, BF16, 20k optimizer steps, and one retained checkpoint. Batch 64 per GPU i
 because video decoding becomes the bottleneck.
 
 ```bash
-cd /root/Projects/diffusion_policy
+cd /home/wzh/Projects/Uni_VLaT/diffusion_policy
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 .venv/bin/torchrun --nproc_per_node=4 --master_port=29511 \
   -m diffusion_policy.sonic.train \
   --config configs/sonic_notactile.json \
-  --dataset-path /root/Projects/data/carry-bucket-stereo \
+  --dataset-path /home/wzh/Projects/Uni_VLaT/data/desk_sweep \
   --output-dir outputs/sonic_notactile \
   --batch-size 32 \
   --gradient-accumulation-steps 1 \
@@ -59,7 +59,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 .venv/bin/torchrun --nproc_per_node=4 --master_port=29512 \
   -m diffusion_policy.sonic.train \
   --config configs/sonic_htd.json \
-  --dataset-path /root/Projects/data/carry-bucket-stereo \
+  --dataset-path /home/wzh/Projects/Uni_VLaT/data/desk_sweep \
   --output-dir outputs/sonic_htd \
   --batch-size 32 \
   --gradient-accumulation-steps 1 \
@@ -75,7 +75,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 .venv/bin/torchrun --nproc_per_node=4 --master_port=29513 \
   -m diffusion_policy.sonic.train \
   --config configs/sonic_jepa.json \
-  --dataset-path /root/Projects/data/carry-bucket-stereo \
+  --dataset-path /home/wzh/Projects/Uni_VLaT/data/desk_sweep \
   --output-dir outputs/sonic_jepa \
   --batch-size 32 \
   --gradient-accumulation-steps 1 \
@@ -107,7 +107,7 @@ Terminal 1, in this repository:
 Terminal 2, expose that websocket backend through the GR00T ZMQ PolicyServer:
 
 ```bash
-cd /root/Projects/Isaac-GR00T
+cd /home/wzh/Projects/Uni_VLaT/Isaac-GR00T
 uv run --no-sync python gr00t/eval/run_sonic_bridge_server.py \
   --backend-host 127.0.0.1 \
   --backend-port 8000 \
@@ -118,7 +118,7 @@ uv run --no-sync python gr00t/eval/run_sonic_bridge_server.py \
 Terminal 3, launch the official SONIC control path:
 
 ```bash
-cd /root/Projects/GR00T-WholeBodyControl
+cd /home/wzh/Projects/Uni_VLaT/GR00T-WholeBodyControl
 python gear_sonic/scripts/launch_inference.py \
   --policy-host 127.0.0.1 \
   --policy-port 5550 \
@@ -128,7 +128,7 @@ python gear_sonic/scripts/launch_inference.py \
 ```
 
 For `sonic_notactile`, add `--no-use-tactile` to the launcher. HTD and JEPA
-checkpoints require a fresh `uint8[256]` tactile frame. The bridge rejects any
+checkpoints require a fresh `uint8[768]` tactile frame. The bridge rejects any
 backend whose state, image, action, horizon, tactile requirement, or protocol
 metadata does not match `sonic_vla_v1`.
 

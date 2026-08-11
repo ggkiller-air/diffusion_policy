@@ -33,7 +33,7 @@ class SonicConfig:
     image_height: int = 128
     image_width: int = 128
     state_dim: int = 46
-    tactile_dim: int = 256
+    tactile_dim: int = 768
     action_dim: int = 78
     action_horizon: int = 40
     dream_horizon: int = 4
@@ -57,7 +57,7 @@ class SonicConfig:
             object.__setattr__(self, "down_dims", tuple(self.down_dims))
         expected = {
             "state_dim": 46,
-            "tactile_dim": 256,
+            "tactile_dim": 768,
             "action_dim": 78,
             "action_horizon": 40,
         }
@@ -99,7 +99,7 @@ class SonicConfig:
 
 PROTOCOL = "sonic_vla_v1"
 STATE_DIM = 46
-TACTILE_DIM = 256
+TACTILE_DIM = 768
 ACTION_DIM = 78
 ACTION_HORIZON = 40
 VIDEO_KEYS = ("ego_view_left", "ego_view_right")

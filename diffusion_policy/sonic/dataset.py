@@ -28,10 +28,14 @@ OBSERVATION_ACTION_COLUMNS = (
     "teleop.left_hand_joints",
     "teleop.right_hand_joints",
 )
-TACTILE_COLUMN = "observation.tactile_raw"
+TACTILE_COLUMNS = (
+    "observation.tactile_vest",
+    "observation.tactile_left_arm",
+    "observation.tactile_right_arm",
+)
 PARQUET_COLUMNS = (
     *OBSERVATION_ACTION_COLUMNS,
-    TACTILE_COLUMN,
+    *TACTILE_COLUMNS,
     "task_index",
 )
 
@@ -203,20 +207,24 @@ class SonicLeRobotDataset(Dataset):
         path = self._format_path(self.info["data_path"], episode_index)
         columns = [*OBSERVATION_ACTION_COLUMNS, "task_index"]
         if self.config.mode.uses_tactile:
-            columns.append(TACTILE_COLUMN)
+            columns.extend(TACTILE_COLUMNS)
         table = pq.read_table(path, columns=columns)
         data = {name: np.asarray(table[name].to_pylist()) for name in columns}
         if self.config.mode.uses_tactile:
-            tactile_column = table[TACTILE_COLUMN]
-            if not pa.types.is_list(tactile_column.type) or not pa.types.is_uint8(
-                tactile_column.type.value_type
-            ):
-                raise ValueError(
-                    f"observation.tactile_raw must be uint8, got {tactile_column.type}"
-                )
-            data[TACTILE_COLUMN] = data[TACTILE_COLUMN].astype(np.uint8, copy=False)
-            if data[TACTILE_COLUMN].shape[1:] != (TACTILE_DIM,):
-                raise ValueError("observation.tactile_raw must have width 256")
+            streams = []
+            for name in TACTILE_COLUMNS:
+                column = table[name]
+                if not pa.types.is_list(column.type) or not pa.types.is_uint8(
+                    column.type.value_type
+                ):
+                    raise ValueError(f"{name} must be uint8, got {column.type}")
+                stream = data.pop(name).astype(np.uint8, copy=False)
+                if stream.shape[1:] != (256,):
+                    raise ValueError(f"{name} must have width 256")
+                streams.append(stream)
+            data["tactile"] = np.concatenate(streams, axis=-1)
+            if data["tactile"].shape[1:] != (TACTILE_DIM,):
+                raise ValueError(f"concatenated tactile must have width {TACTILE_DIM}")
         self._parquet_cache[episode_index] = data
         while len(self._parquet_cache) > self._parquet_cache_size:
             self._parquet_cache.popitem(last=False)
@@ -308,10 +316,10 @@ class SonicLeRobotDataset(Dataset):
         }
         if self.config.mode.uses_tactile:
             sample["tactile"] = torch.from_numpy(
-                data["observation.tactile_raw"][frame_index].copy()
+                data["tactile"][frame_index].copy()
             )
             sample["future_tactile"] = torch.from_numpy(
-                data["observation.tactile_raw"][future].copy()
+                data["tactile"][future].copy()
             )
         if self.config.mode.dreams_state_and_vision:
             sample["future_state"] = torch.from_numpy(states[future].copy())

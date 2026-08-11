@@ -47,7 +47,7 @@ def validate_observation(
     result["prompt"] = prompt
     tactile_value = observation.get("tactile")
     if requires_tactile and tactile_value is None:
-        raise ValueError("this checkpoint requires tactile uint8[256]")
+        raise ValueError(f"this checkpoint requires tactile uint8[{TACTILE_DIM}]")
     if tactile_value is not None:
         tactile = np.asarray(tactile_value)
         if tactile.dtype != np.uint8 or tactile.shape != (TACTILE_DIM,):
