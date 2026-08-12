@@ -28,6 +28,47 @@ from diffusion_policy.sonic.policy import SonicDiffusionPolicy
 LOGGER = logging.getLogger(__name__)
 
 
+def split_episode_indices(dataset_path: str | Path, val_ratio: float, seed: int) -> tuple[set[int], set[int]]:
+    if not 0.0 < val_ratio < 1.0:
+        raise ValueError("val_ratio must be between 0 and 1")
+    with (Path(dataset_path) / "meta" / "episodes.jsonl").open(encoding="utf-8") as handle:
+        episode_ids = [int(json.loads(line)["episode_index"]) for line in handle if line.strip()]
+    if len(episode_ids) < 2:
+        raise ValueError("best-model validation requires at least two episodes")
+    rng = np.random.default_rng(seed)
+    shuffled = np.asarray(episode_ids, dtype=np.int64)
+    rng.shuffle(shuffled)
+    val_count = min(len(shuffled) - 1, max(1, round(len(shuffled) * val_ratio)))
+    val_ids = set(shuffled[:val_count].tolist())
+    return set(shuffled[val_count:].tolist()), val_ids
+
+
+@torch.no_grad()
+def evaluate_action_mse(model, loader, device, *, seed: int, max_batches: int, world_size: int) -> float:
+    was_training = model.training
+    model.eval()
+    squared_error = torch.zeros((), dtype=torch.float64, device=device)
+    count = torch.zeros((), dtype=torch.float64, device=device)
+    generator = torch.Generator(device=device).manual_seed(seed)
+    for batch_index, batch in enumerate(loader):
+        if batch_index >= max_batches:
+            break
+        batch = _move_batch(batch, device)
+        predicted = model.predict_actions(batch, generator=generator)
+        target = batch["actions"].float()
+        predicted = model._normalize_action(predicted)
+        target = model._normalize_action(target)
+        squared_error += (predicted.double() - target.double()).square().sum()
+        count += target.numel()
+    if world_size > 1:
+        dist.all_reduce(squared_error)
+        dist.all_reduce(count)
+    model.train(was_training)
+    if count.item() == 0:
+        raise RuntimeError("validation loader produced no actions")
+    return (squared_error / count).item()
+
+
 def _distributed_setup() -> tuple[int, int, int]:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
@@ -103,8 +144,14 @@ def train(args) -> None:
         )
     if world_size > 1:
         dist.barrier()
+    train_episode_ids, val_episode_ids = split_episode_indices(
+        args.dataset_path, args.val_ratio, args.seed
+    )
     dataset = SonicLeRobotDataset(
-        args.dataset_path, config, video_cache_dir=args.video_cache_dir
+        args.dataset_path,
+        config,
+        video_cache_dir=args.video_cache_dir,
+        episode_indices=train_episode_ids,
     )
     sampler = (
         DistributedSampler(
@@ -126,6 +173,30 @@ def train(args) -> None:
     )
     if len(loader) == 0:
         raise ValueError("batch_size is larger than the available dataset")
+    val_dataset = SonicLeRobotDataset(
+        args.dataset_path,
+        config,
+        video_cache_dir=args.video_cache_dir,
+        episode_indices=val_episode_ids,
+    )
+    val_sampler = (
+        DistributedSampler(
+            val_dataset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False
+        )
+        if world_size > 1
+        else None
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        sampler=val_sampler,
+        num_workers=args.num_workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=args.num_workers > 0,
+        prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
+        drop_last=False,
+    )
 
     model = SonicDiffusionPolicy(config).to(device)
     model.set_normalization_stats(stats)
@@ -150,6 +221,11 @@ def train(args) -> None:
         if world_size > 1
         else model
     )
+    best_metadata_path = output_dir / "best_model" / "metrics.json"
+    best_mse = float("inf")
+    if best_metadata_path.is_file():
+        with best_metadata_path.open(encoding="utf-8") as handle:
+            best_mse = float(json.load(handle)["val_action_mse"])
 
     wandb_run = None
     if args.use_wandb and rank == 0:
@@ -231,6 +307,31 @@ def train(args) -> None:
                 ]
                 for path in old:
                     path.unlink()
+            if args.eval_every > 0 and step % args.eval_every == 0:
+                val_mse = evaluate_action_mse(
+                    model,
+                    val_loader,
+                    device,
+                    seed=args.seed + 10_000,
+                    max_batches=args.val_batches,
+                    world_size=world_size,
+                )
+                if rank == 0:
+                    LOGGER.info("step=%d val_action_mse=%.8f", step, val_mse)
+                    if wandb_run is not None:
+                        wandb_run.log({"val/action_mse": val_mse}, step=step)
+                    if val_mse < best_mse:
+                        best_mse = val_mse
+                        best_dir = output_dir / "best_model"
+                        save_checkpoint(best_dir / "checkpoint.pt", model, step=step)
+                        temporary = best_dir / "metrics.json.tmp"
+                        with temporary.open("w", encoding="utf-8") as handle:
+                            json.dump({"step": step, "val_action_mse": val_mse}, handle, indent=2)
+                            handle.write("\n")
+                        temporary.replace(best_metadata_path)
+                        LOGGER.info("updated best_model at step=%d", step)
+                if world_size > 1:
+                    dist.barrier()
             if step >= args.max_steps:
                 break
             data_start = time.perf_counter()
@@ -276,6 +377,9 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--save-every", type=int, default=1000)
     parser.add_argument("--save-total-limit", type=int, default=1)
+    parser.add_argument("--eval-every", type=int, default=5000)
+    parser.add_argument("--val-ratio", type=float, default=0.05)
+    parser.add_argument("--val-batches", type=int, default=8)
     parser.add_argument("--resume", default=None)
     parser.add_argument("--use-wandb", action="store_true")
     parser.add_argument("--wandb-project", default="univlat")

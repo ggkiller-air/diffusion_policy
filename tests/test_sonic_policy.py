@@ -11,6 +11,7 @@ from diffusion_policy.sonic.dataset import (
     assemble_state_46,
 )
 from diffusion_policy.sonic.policy import SonicDiffusionPolicy
+from diffusion_policy.sonic.train import split_episode_indices
 
 
 def small_config(mode: TactileMode) -> SonicConfig:
@@ -110,6 +111,25 @@ def test_video_cache_validation_and_path(tmp_path):
 
     np.save(path, np.zeros((3, 16, 20, 3), dtype=np.float32), allow_pickle=False)
     assert not _valid_cached_video(path, 3, 16, 20)
+
+
+def test_episode_split_is_deterministic_and_disjoint(tmp_path):
+    meta = tmp_path / "meta"
+    meta.mkdir()
+    (meta / "episodes.jsonl").write_text(
+        "".join(
+            f'{{"episode_index": {episode}, "length": 100}}\n'
+            for episode in range(20)
+        ),
+        encoding="utf-8",
+    )
+    train_a, val_a = split_episode_indices(tmp_path, 0.05, 42)
+    train_b, val_b = split_episode_indices(tmp_path, 0.05, 42)
+
+    assert (train_a, val_a) == (train_b, val_b)
+    assert train_a.isdisjoint(val_a)
+    assert train_a | val_a == set(range(20))
+    assert len(val_a) == 1
 
 
 def test_wire_validation_is_strict():

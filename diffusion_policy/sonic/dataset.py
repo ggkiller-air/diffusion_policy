@@ -407,6 +407,7 @@ class SonicLeRobotDataset(Dataset):
         *,
         parquet_cache_size: int = 2,
         video_cache_dir: str | Path | None = None,
+        episode_indices: set[int] | None = None,
     ) -> None:
         self.root = Path(dataset_path)
         self.config = config
@@ -415,18 +416,27 @@ class SonicLeRobotDataset(Dataset):
         self.chunk_size = int(self.info.get("chunks_size", 1000))
         tasks = _read_jsonl(self.root / "meta" / "tasks.jsonl")
         self.tasks = {int(item["task_index"]): item["task"] for item in tasks}
-        self.episodes = _read_jsonl(self.root / "meta" / "episodes.jsonl")
+        all_episodes = _read_jsonl(self.root / "meta" / "episodes.jsonl")
         self.episode_lengths = {
             int(episode["episode_index"]): int(episode["length"])
-            for episode in self.episodes
+            for episode in all_episodes
         }
-        self.valid_lengths = []
         self.episode_offsets = {}
         offset = 0
-        for episode in self.episodes:
+        for episode in all_episodes:
             episode_index = int(episode["episode_index"])
             self.episode_offsets[episode_index] = offset
             offset += int(episode["length"])
+
+        self.episodes = [
+            episode
+            for episode in all_episodes
+            if episode_indices is None or int(episode["episode_index"]) in episode_indices
+        ]
+        if not self.episodes:
+            raise ValueError("episode selection is empty")
+        self.valid_lengths = []
+        for episode in self.episodes:
             valid = int(episode["length"]) - config.action_horizon + 1
             self.valid_lengths.append(max(0, valid))
         self.cumulative_lengths = np.cumsum(self.valid_lengths).tolist()

@@ -54,6 +54,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
   --max-steps 25000 \
   --save-every 5000 \
   --save-total-limit 5 \
+  --eval-every 5000 \
   --bf16 \
   --use-wandb \
   --wandb-project univlat \
@@ -71,6 +72,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
   --max-steps 25000 \
   --save-every 5000 \
   --save-total-limit 5 \
+  --eval-every 5000 \
   --bf16 \
   --use-wandb \
   --wandb-project univlat \
@@ -88,6 +90,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
   --max-steps 25000 \
   --save-every 5000 \
   --save-total-limit 5 \
+  --eval-every 5000 \
   --bf16 \
   --use-wandb \
   --wandb-project univlat \
@@ -96,6 +99,11 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 `--batch-size` is per GPU. Each command has global batch size `32 x 4 = 128`; the
 deployable checkpoint is `outputs/sonic_<mode>/latest.pt`.
+
+Training reserves a deterministic 5% episode split for validation. Every 5000 steps it
+evaluates up to eight fixed validation batches and atomically replaces
+`outputs/sonic_<mode>/best_model/checkpoint.pt` only when action MSE improves. Periodic
+resumable checkpoints and their retention policy are unchanged.
 
 The cache is intentionally tied to the current `desk_sweep` layout and configured image
 resolution. Delete its versioned directory only when rebuilding after changing the source
