@@ -4,7 +4,12 @@ import torch
 
 from diffusion_policy.sonic.adapter import SonicPolicyAdapter, validate_observation
 from diffusion_policy.sonic.config import SonicConfig, TactileMode
-from diffusion_policy.sonic.dataset import assemble_action_78, assemble_state_46
+from diffusion_policy.sonic.dataset import (
+    _cached_video_path,
+    _valid_cached_video,
+    assemble_action_78,
+    assemble_state_46,
+)
 from diffusion_policy.sonic.policy import SonicDiffusionPolicy
 
 
@@ -93,6 +98,18 @@ def test_dataset_assembly_matches_sonic_layout():
     action = assemble_action_78(np.zeros(64), np.ones(7), np.full(7, 2))
     np.testing.assert_array_equal(action[64:71], 1)
     np.testing.assert_array_equal(action[71:78], 2)
+
+
+def test_video_cache_validation_and_path(tmp_path):
+    path = _cached_video_path(tmp_path, "observation.images.ego_view_left", 7)
+    path.parent.mkdir(parents=True)
+    np.save(path, np.zeros((3, 16, 20, 3), dtype=np.uint8), allow_pickle=False)
+    assert _valid_cached_video(path, 3, 16, 20)
+    assert not _valid_cached_video(path, 4, 16, 20)
+    assert not _valid_cached_video(path, 3, 20, 16)
+
+    np.save(path, np.zeros((3, 16, 20, 3), dtype=np.float32), allow_pickle=False)
+    assert not _valid_cached_video(path, 3, 16, 20)
 
 
 def test_wire_validation_is_strict():

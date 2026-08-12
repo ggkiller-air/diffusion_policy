@@ -33,8 +33,10 @@ The SONIC path is independent of the repository's legacy robomimic environment.
 ## Full training
 
 The measured four-A800 setting uses batch 32 per GPU, global batch 128, four workers per
-rank, BF16, 20k optimizer steps, and one retained checkpoint. Batch 64 per GPU is slower
-because video decoding becomes the bottleneck.
+rank, BF16, and 25k optimizer steps. This processes 3.2M samples, matching the completed
+Isaac-GR00T run (`50,000 x 64`). The first launch builds reusable memory-mapped low-dimensional
+and resized RGB caches under `data/desk_sweep/.cache/diffusion_policy`; subsequent workers
+index those arrays without opening or seeking MP4 files in `__getitem__`.
 
 ```bash
 cd /home/wzh/Projects/Uni_VLaT/diffusion_policy
@@ -48,9 +50,10 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
   --batch-size 32 \
   --gradient-accumulation-steps 1 \
   --num-workers 4 \
-  --max-steps 20000 \
-  --save-every 1000 \
-  --save-total-limit 1 \
+  --prefetch-factor 4 \
+  --max-steps 25000 \
+  --save-every 5000 \
+  --save-total-limit 5 \
   --bf16 \
   --use-wandb \
   --wandb-project univlat \
@@ -64,9 +67,10 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
   --batch-size 32 \
   --gradient-accumulation-steps 1 \
   --num-workers 4 \
-  --max-steps 20000 \
-  --save-every 1000 \
-  --save-total-limit 1 \
+  --prefetch-factor 4 \
+  --max-steps 25000 \
+  --save-every 5000 \
+  --save-total-limit 5 \
   --bf16 \
   --use-wandb \
   --wandb-project univlat \
@@ -80,9 +84,10 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
   --batch-size 32 \
   --gradient-accumulation-steps 1 \
   --num-workers 4 \
-  --max-steps 20000 \
-  --save-every 1000 \
-  --save-total-limit 1 \
+  --prefetch-factor 4 \
+  --max-steps 25000 \
+  --save-every 5000 \
+  --save-total-limit 5 \
   --bf16 \
   --use-wandb \
   --wandb-project univlat \
@@ -91,6 +96,10 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 `--batch-size` is per GPU. Each command has global batch size `32 x 4 = 128`; the
 deployable checkpoint is `outputs/sonic_<mode>/latest.pt`.
+
+The cache is intentionally tied to the current `desk_sweep` layout and configured image
+resolution. Delete its versioned directory only when rebuilding after changing the source
+videos. A custom location can be selected with `--video-cache-dir`.
 
 ## Serve And Bridge
 

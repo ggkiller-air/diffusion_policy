@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from diffusion_policy.sonic.checkpoint import load_checkpoint_payload, save_chec
 from diffusion_policy.sonic.config import SonicConfig, TactileMode
 from diffusion_policy.sonic.dataset import (
     SonicLeRobotDataset,
+    build_training_cache,
     compute_normalization_stats,
 )
 from diffusion_policy.sonic.policy import SonicDiffusionPolicy
@@ -88,7 +90,22 @@ def train(args) -> None:
         LOGGER.info("SONIC config: %s", json.dumps(config.to_dict(), indent=2))
 
     stats = _normalization_stats(args.dataset_path, rank, world_size)
-    dataset = SonicLeRobotDataset(args.dataset_path, config)
+    if rank == 0:
+        cache_start = time.perf_counter()
+        lowdim_cache_root, video_cache_root = build_training_cache(
+            args.dataset_path, config, args.video_cache_dir, progress=True
+        )
+        LOGGER.info(
+            "Training caches ready at %s and %s in %.1f seconds",
+            lowdim_cache_root,
+            video_cache_root,
+            time.perf_counter() - cache_start,
+        )
+    if world_size > 1:
+        dist.barrier()
+    dataset = SonicLeRobotDataset(
+        args.dataset_path, config, video_cache_dir=args.video_cache_dir
+    )
     sampler = (
         DistributedSampler(
             dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=args.seed
@@ -104,6 +121,7 @@ def train(args) -> None:
         num_workers=args.num_workers,
         pin_memory=device.type == "cuda",
         persistent_workers=args.num_workers > 0,
+        prefetch_factor=args.prefetch_factor if args.num_workers > 0 else None,
         drop_last=True,
     )
     if len(loader) == 0:
@@ -145,11 +163,18 @@ def train(args) -> None:
 
     epoch = 0
     micro_step = 0
+    interval_data_time = 0.0
+    interval_step_time = 0.0
+    interval_steps = 0
+    data_start = time.perf_counter()
     optimizer.zero_grad(set_to_none=True)
     while step < args.max_steps:
         if sampler is not None:
             sampler.set_epoch(epoch)
         for batch in loader:
+            data_end = time.perf_counter()
+            step_start = data_end
+            interval_data_time += data_end - data_start
             batch = _move_batch(batch, device)
             autocast = (
                 torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -168,11 +193,23 @@ def train(args) -> None:
             optimizer.zero_grad(set_to_none=True)
             model.update_teacher()
             step += 1
+            interval_step_time += time.perf_counter() - step_start
+            interval_steps += 1
 
             if rank == 0 and (step == 1 or step % args.log_every == 0):
                 metrics = {
                     name: float(value.detach()) for name, value in losses.items()
                 }
+                elapsed = interval_data_time + interval_step_time
+                metrics.update(
+                    {
+                        "data_time": interval_data_time / interval_steps,
+                        "step_time": interval_step_time / interval_steps,
+                        "global_samples_per_second": (
+                            interval_steps * args.batch_size * world_size / elapsed
+                        ),
+                    }
+                )
                 LOGGER.info(
                     "step=%d %s",
                     step,
@@ -180,6 +217,9 @@ def train(args) -> None:
                 )
                 if wandb_run is not None:
                     wandb_run.log(metrics, step=step)
+                interval_data_time = 0.0
+                interval_step_time = 0.0
+                interval_steps = 0
             if rank == 0 and args.save_every > 0 and step % args.save_every == 0:
                 step_path = output_dir / f"checkpoint-{step:08d}.pt"
                 save_checkpoint(step_path, model, step=step, optimizer=optimizer)
@@ -193,6 +233,7 @@ def train(args) -> None:
                     path.unlink()
             if step >= args.max_steps:
                 break
+            data_start = time.perf_counter()
         epoch += 1
 
     if rank == 0:
@@ -213,6 +254,11 @@ def build_argparser() -> argparse.ArgumentParser:
         "--mode", choices=[mode.value for mode in TactileMode], default=None
     )
     parser.add_argument("--dataset-path", required=True)
+    parser.add_argument(
+        "--video-cache-dir",
+        default=None,
+        help="Optional mmap video cache directory (default: <dataset>/.cache/diffusion_policy/...)",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default="auto")
     parser.add_argument(
@@ -220,7 +266,8 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--max-steps", type=int, default=20000)
+    parser.add_argument("--prefetch-factor", type=int, default=4)
+    parser.add_argument("--max-steps", type=int, default=25000)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-6)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
