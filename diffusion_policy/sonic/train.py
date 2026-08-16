@@ -26,6 +26,20 @@ from diffusion_policy.sonic.dataset import (
 from diffusion_policy.sonic.policy import SonicDiffusionPolicy
 
 LOGGER = logging.getLogger(__name__)
+COMPARISON_GROUP = "sonic-htd-model-comparison"
+
+
+def comparison_metrics(metrics: dict[str, float], step: int, learning_rate: float) -> dict[str, float]:
+    """Return the common W&B schema used across all five VLA trainers."""
+    aliases = {
+        "comparison/step": step,
+        "comparison/loss": metrics.get("loss"),
+        "comparison/action_loss": metrics.get("action_loss"),
+        "comparison/tactile_loss": metrics.get("tactile_jepa_loss"),
+        "comparison/vision_loss": metrics.get("vision_jepa_loss"),
+        "comparison/lr": learning_rate,
+    }
+    return {key: value for key, value in aliases.items() if value is not None}
 
 
 def split_episode_indices(dataset_path: str | Path, val_ratio: float, seed: int) -> tuple[set[int], set[int]]:
@@ -221,6 +235,15 @@ def train(args) -> None:
         if world_size > 1
         else model
     )
+    if step == 0 and args.resume is None:
+        if rank == 0:
+            LOGGER.info("saving step-0 smoke checkpoint before training")
+            save_checkpoint(
+                output_dir / "checkpoint-00000000.pt", model, step=0, optimizer=optimizer
+            )
+            save_checkpoint(output_dir / "latest.pt", model, step=0, optimizer=optimizer)
+        if world_size > 1:
+            dist.barrier()
     best_metadata_path = output_dir / "best_model" / "metrics.json"
     best_mse = float("inf")
     if best_metadata_path.is_file():
@@ -233,9 +256,12 @@ def train(args) -> None:
 
         wandb_run = wandb.init(
             project=args.wandb_project,
-            name=args.run_name or f"dp-sonic-{config.mode.value}",
+            name=f"Diffusion Policy / {config.mode.value}",
+            group=COMPARISON_GROUP,
+            job_type="comparison-training",
             config={**config.to_dict(), **vars(args)},
         )
+        wandb_run.define_metric("comparison/*", step_metric="comparison/step")
 
     epoch = 0
     micro_step = 0
@@ -292,6 +318,9 @@ def train(args) -> None:
                     " ".join(f"{key}={value:.6f}" for key, value in metrics.items()),
                 )
                 if wandb_run is not None:
+                    metrics.update(
+                        comparison_metrics(metrics, step, optimizer.param_groups[-1]["lr"])
+                    )
                     wandb_run.log(metrics, step=step)
                 interval_data_time = 0.0
                 interval_step_time = 0.0

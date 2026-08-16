@@ -11,7 +11,7 @@ from diffusion_policy.sonic.dataset import (
     assemble_state_46,
 )
 from diffusion_policy.sonic.policy import SonicDiffusionPolicy
-from diffusion_policy.sonic.train import split_episode_indices
+from diffusion_policy.sonic.train import comparison_metrics, split_episode_indices
 
 
 def small_config(mode: TactileMode) -> SonicConfig:
@@ -39,7 +39,9 @@ def make_batch(mode: TactileMode) -> dict[str, torch.Tensor]:
         "actions": torch.randn(1, 40, 78),
     }
     if mode.uses_tactile:
-        batch["tactile"] = torch.zeros(1, 768, dtype=torch.uint8)
+        batch["tactile"] = torch.zeros(
+            1, 4 if mode is TactileMode.JEPA else 1, 768, dtype=torch.uint8
+        )
         batch["future_tactile"] = torch.zeros(1, 4, 768, dtype=torch.uint8)
     if mode.dreams_state_and_vision:
         batch["future_state"] = torch.randn(1, 4, 46)
@@ -62,6 +64,35 @@ def test_three_modes_have_exact_auxiliary_losses():
     for mode in TactileMode:
         policy = SonicDiffusionPolicy(small_config(mode))
         assert set(policy(make_batch(mode))) == expected[mode]
+
+
+def test_jepa_uses_temporal_tactile_and_delta_targets():
+    config = small_config(TactileMode.JEPA)
+    policy = SonicDiffusionPolicy(config)
+    assert policy.tactile_temporal_encoder is not None
+    future = torch.randn(2, 4, 16)
+    current = torch.randn(2, 16)
+    assert torch.equal(
+        policy._prediction_target(future, current, True),
+        future - current[:, None],
+    )
+    zero = torch.zeros(2, 4, 16)
+    assert policy._latent_loss(zero, zero) == 0
+
+
+def test_comparison_metrics_maps_jepa_losses_without_fabricating_vision():
+    metrics = comparison_metrics(
+        {"loss": 1.1, "action_loss": 1.0, "tactile_jepa_loss": 0.1},
+        step=20,
+        learning_rate=1e-4,
+    )
+    assert metrics == {
+        "comparison/step": 20,
+        "comparison/loss": 1.1,
+        "comparison/action_loss": 1.0,
+        "comparison/tactile_loss": 0.1,
+        "comparison/lr": 1e-4,
+    }
 
 
 def test_dream_horizon_must_fit_the_episode_safe_action_window():

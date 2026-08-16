@@ -37,6 +37,7 @@ class SonicConfig:
     action_dim: int = 78
     action_horizon: int = 40
     dream_horizon: int = 4
+    tactile_history_length: int = 4
     vision_feature_dim: int = 128
     state_feature_dim: int = 128
     tactile_feature_dim: int = 128
@@ -70,12 +71,22 @@ class SonicConfig:
             raise ValueError("dream_horizon must be positive")
         if self.dream_horizon >= self.action_horizon:
             raise ValueError("dream_horizon must be smaller than action_horizon")
+        if self.tactile_history_length < 2:
+            raise ValueError("tactile_history_length must be at least 2")
         if self.image_height < 16 or self.image_width < 16:
             raise ValueError("image dimensions must be at least 16 pixels")
         if not 0.0 <= self.teacher_momentum < 1.0:
             raise ValueError("teacher_momentum must be in [0, 1)")
         if not self.down_dims or any(dim % 8 for dim in self.down_dims):
             raise ValueError("down_dims must be non-empty and divisible by 8")
+
+    @property
+    def use_tactile_temporal(self) -> bool:
+        return self.mode is TactileMode.JEPA
+
+    @property
+    def use_delta_targets(self) -> bool:
+        return self.mode is TactileMode.JEPA
 
     @classmethod
     def from_json(cls, path: str | Path) -> SonicConfig:

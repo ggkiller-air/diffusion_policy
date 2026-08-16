@@ -66,6 +66,35 @@ class PromptEncoder(nn.Module):
         return self.projection(pooled)
 
 
+class TactileTemporalEncoder(nn.Module):
+    def __init__(self, feature_dim: int, history_length: int) -> None:
+        super().__init__()
+        self.history_length = history_length
+        self.time_embedding = nn.Parameter(torch.empty(history_length, feature_dim))
+        layer = nn.TransformerEncoderLayer(
+            d_model=feature_dim,
+            nhead=8,
+            dim_feedforward=2 * feature_dim,
+            dropout=0.0,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(layer, num_layers=1)
+        self.output_norm = nn.LayerNorm(feature_dim)
+        nn.init.normal_(self.time_embedding, mean=0.0, std=0.02)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        if features.ndim != 3 or features.shape[1] != self.history_length:
+            raise ValueError(
+                f"expected tactile features [B,{self.history_length},D], got {features.shape}"
+            )
+        encoded = self.transformer(
+            features + self.time_embedding[None].to(features.dtype)
+        )
+        return self.output_norm(encoded[:, -1])
+
+
 class SonicDiffusionPolicy(nn.Module):
     """Stereo diffusion policy with optional HTD/UniVLaT auxiliary prediction.
 
@@ -90,9 +119,17 @@ class SonicDiffusionPolicy(nn.Module):
             self.tactile_encoder = VectorEncoder(
                 config.tactile_dim, config.tactile_feature_dim
             )
+            self.tactile_temporal_encoder = (
+                TactileTemporalEncoder(
+                    config.tactile_feature_dim, config.tactile_history_length
+                )
+                if config.use_tactile_temporal
+                else None
+            )
             context_input_dim += config.tactile_feature_dim
         else:
             self.tactile_encoder = None
+            self.tactile_temporal_encoder = None
         self.context_projection = nn.Sequential(
             nn.Linear(context_input_dim, config.context_dim),
             nn.LayerNorm(config.context_dim),
@@ -210,22 +247,58 @@ class SonicDiffusionPolicy(nn.Module):
         ]
         if self.config.mode.uses_tactile:
             tactile = batch.get("tactile")
-            if (
-                tactile is None
-                or tactile.ndim != 2
-                or tactile.shape[-1] != self.config.tactile_dim
-            ):
+            if tactile is None or tactile.shape[-1] != self.config.tactile_dim:
                 raise ValueError(
-                    f"{self.config.mode.value} requires tactile [B, {self.config.tactile_dim}]"
+                    f"{self.config.mode.value} requires tactile width {self.config.tactile_dim}"
                 )
-            features.append(self.tactile_encoder(tactile.float().div(255.0)))
+            if tactile.ndim == 2:
+                tactile = tactile[:, None]
+            if tactile.ndim != 3:
+                raise ValueError("tactile must be [B,D] or [B,T,D]")
+            history = tactile[:, -self.config.tactile_history_length :]
+            if history.shape[1] < self.config.tactile_history_length:
+                history = torch.cat(
+                    (
+                        history[:, :1].expand(
+                            -1,
+                            self.config.tactile_history_length - history.shape[1],
+                            -1,
+                        ),
+                        history,
+                    ),
+                    dim=1,
+                )
+            batch_size, steps, width = history.shape
+            tactile_features = self.tactile_encoder(
+                history.float().div(255.0).reshape(batch_size * steps, width)
+            ).reshape(batch_size, steps, self.config.tactile_feature_dim)
+            if self.tactile_temporal_encoder is not None:
+                tactile_features = self.tactile_temporal_encoder(tactile_features)
+            else:
+                tactile_features = tactile_features[:, -1]
+            features.append(tactile_features)
         return self.context_projection(torch.cat(features, dim=-1))
 
     @staticmethod
     def _latent_loss(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        prediction = F.normalize(prediction, dim=-1)
-        target = F.normalize(target.detach(), dim=-1)
-        return F.smooth_l1_loss(prediction, target)
+        prediction = prediction.float()
+        target = target.detach().float()
+        direction = 1.0 - F.cosine_similarity(prediction, target, dim=-1)
+        direction = direction * (target.norm(dim=-1) > 1e-6).to(direction.dtype)
+        magnitude = F.smooth_l1_loss(
+            prediction.norm(dim=-1), target.norm(dim=-1), reduction="none"
+        )
+        return (direction + magnitude).mean()
+
+    @staticmethod
+    def _prediction_target(
+        future: torch.Tensor, current: torch.Tensor, use_delta: bool
+    ) -> torch.Tensor:
+        if not use_delta:
+            return future
+        if current.ndim == future.ndim - 1:
+            current = current.unsqueeze(1)
+        return future - current
 
     def _auxiliary_losses(
         self, context: torch.Tensor, batch: Mapping[str, torch.Tensor]
@@ -248,6 +321,17 @@ class SonicDiffusionPolicy(nn.Module):
                     .div(255.0)
                     .reshape(-1, self.config.tactile_dim)
                 ).reshape(batch_size, horizon, self.config.tactile_feature_dim)
+                current_tactile = batch["tactile"]
+                if current_tactile.ndim == 3:
+                    current_tactile = current_tactile[:, -1]
+                current_tactile_target = self.teacher_tactile_encoder(
+                    current_tactile.float().div(255.0)
+                )
+                tactile_target = self._prediction_target(
+                    tactile_target,
+                    current_tactile_target,
+                    self.config.use_delta_targets,
+                )
             if self.config.mode.dreams_state_and_vision:
                 future_state = batch.get("future_state")
                 future_images = batch.get("future_images")
@@ -278,6 +362,26 @@ class SonicDiffusionPolicy(nn.Module):
                     future_images[:, :, 1].reshape(-1, *future_images.shape[3:]).float()
                 ).reshape(batch_size, horizon, self.config.vision_feature_dim)
                 vision_target = torch.stack((left_target, right_target), dim=2)
+                current_state_target = self.teacher_state_encoder(
+                    self._normalize_state(batch["state"])
+                )
+                state_target = self._prediction_target(
+                    state_target,
+                    current_state_target,
+                    self.config.use_delta_targets,
+                )
+                current_left = self.teacher_left_vision_encoder(
+                    batch["images"][:, 0].float()
+                )
+                current_right = self.teacher_right_vision_encoder(
+                    batch["images"][:, 1].float()
+                )
+                current_vision = torch.stack((current_left, current_right), dim=1)
+                vision_target = self._prediction_target(
+                    vision_target,
+                    current_vision,
+                    self.config.use_delta_targets,
+                )
         if self.config.mode.dreams_tactile:
             tactile_prediction = self.tactile_predictor(context).reshape(
                 batch_size, horizon, self.config.tactile_feature_dim

@@ -525,7 +525,19 @@ class SonicLeRobotDataset(Dataset):
             "actions": torch.from_numpy(self.action[action_slice].copy()),
         }
         if self.config.mode.uses_tactile:
-            sample["tactile"] = torch.from_numpy(self.tactile[absolute_index].copy())
+            if self.config.use_tactile_temporal:
+                history = np.arange(
+                    frame_index - self.config.tactile_history_length + 1,
+                    frame_index + 1,
+                ).clip(min=0)
+                absolute_history = self.episode_offsets[episode_index] + history
+                sample["tactile"] = torch.from_numpy(
+                    self.tactile[absolute_history].copy()
+                )
+            else:
+                sample["tactile"] = torch.from_numpy(
+                    self.tactile[absolute_index].copy()
+                )
             sample["future_tactile"] = torch.from_numpy(self.tactile[absolute_future].copy())
         if self.config.mode.dreams_state_and_vision:
             sample["future_state"] = torch.from_numpy(self.state[absolute_future].copy())
