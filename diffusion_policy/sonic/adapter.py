@@ -20,7 +20,7 @@ from diffusion_policy.sonic.config import (
 
 
 def validate_observation(
-    observation: Mapping[str, Any], *, requires_tactile: bool
+    observation: Mapping[str, Any], *, requires_tactile: bool, tactile_history_length: int = 1
 ) -> dict:
     state = np.asarray(observation.get("state"))
     if state.dtype != np.float32 or state.shape != (STATE_DIM,):
@@ -50,9 +50,13 @@ def validate_observation(
         raise ValueError(f"this checkpoint requires tactile uint8[{TACTILE_DIM}]")
     if tactile_value is not None:
         tactile = np.asarray(tactile_value)
-        if tactile.dtype != np.uint8 or tactile.shape != (TACTILE_DIM,):
+        expected_shape = (
+            (TACTILE_DIM,) if tactile_history_length == 1 else (tactile_history_length, TACTILE_DIM)
+        )
+        if tactile.dtype != np.uint8 or tactile.shape != expected_shape:
             raise ValueError(
-                f"tactile must be uint8[{TACTILE_DIM}], got {tactile.dtype} {tactile.shape}"
+                f"tactile must have shape {expected_shape} and dtype uint8, "
+                f"got {tactile.dtype} {tactile.shape}"
             )
         result["tactile"] = tactile
     return result
@@ -63,6 +67,9 @@ class SonicPolicyAdapter:
         self.policy = policy
         self.device = torch.device(device)
         self.requires_tactile = policy.config.mode.uses_tactile
+        self.tactile_history_length = (
+            policy.config.tactile_history_length if policy.config.use_tactile_temporal else 1
+        ) if self.requires_tactile else 0
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -74,6 +81,7 @@ class SonicPolicyAdapter:
             "action_dim": ACTION_DIM,
             "video_keys": list(VIDEO_KEYS),
             "requires_tactile": self.requires_tactile,
+            "tactile_history_length": self.tactile_history_length,
             "action_layout": ACTION_LAYOUT,
         }
 
@@ -94,7 +102,11 @@ class SonicPolicyAdapter:
 
     @torch.inference_mode()
     def infer(self, observation: Mapping[str, Any]) -> dict[str, np.ndarray]:
-        obs = validate_observation(observation, requires_tactile=self.requires_tactile)
+        obs = validate_observation(
+            observation,
+            requires_tactile=self.requires_tactile,
+            tactile_history_length=self.tactile_history_length,
+        )
         batch = {
             "state": torch.from_numpy(obs["state"].copy()).unsqueeze(0).to(self.device),
             "images": torch.stack(

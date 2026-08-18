@@ -176,6 +176,16 @@ def test_wire_validation_is_strict():
     observation["tactile"] = np.zeros(768, dtype=np.uint8)
     validate_observation(observation, requires_tactile=True)
 
+    observation["tactile"] = np.zeros((4, 768), dtype=np.uint8)
+    validate_observation(observation, requires_tactile=True, tactile_history_length=4)
+    with pytest.raises(ValueError, match="shape"):
+        validate_observation(observation, requires_tactile=True, tactile_history_length=3)
+
+
+def test_jepa_adapter_declares_four_frame_tactile_history():
+    adapter = SonicPolicyAdapter(SonicDiffusionPolicy(small_config(TactileMode.JEPA)), "cpu")
+    assert adapter.metadata["tactile_history_length"] == 4
+
 
 def test_adapter_returns_canonical_action_shape():
     policy = SonicDiffusionPolicy(small_config(TactileMode.NOTACTILE)).eval()

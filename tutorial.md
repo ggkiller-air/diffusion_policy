@@ -147,8 +147,9 @@ python gear_sonic/scripts/launch_inference.py \
   --prompt "move the bucket to the next stool"
 ```
 
-For `sonic_notactile`, add `--no-use-tactile` to the launcher. HTD and JEPA
-checkpoints require a fresh `uint8[768]` tactile frame. The bridge rejects any
+For `sonic_notactile`, add `--no-use-tactile` to the launcher. The four-frame JEPA
+checkpoint receives `uint8[4,768]`; the bridge builds that rolling history from fresh current
+packets and clears it on reset. The bridge rejects any
 backend whose state, image, action, horizon, tactile requirement, or protocol
 metadata does not match `sonic_vla_v1`.
 The verified HTD best checkpoint runs on one 24 GB RTX 4090.
