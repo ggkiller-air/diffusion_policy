@@ -114,9 +114,11 @@ videos. A custom location can be selected with `--video-cache-dir`.
 Terminal 1, in this repository:
 
 ```bash
+cd /home/wzh/Projects/Uni_VLaT/diffusion_policy
+CUDA_VISIBLE_DEVICES=0 \
 .venv/bin/python -m diffusion_policy.sonic.serve_policy \
-  --checkpoint outputs/sonic_jepa/latest.pt \
-  --device cuda:2 \
+  --checkpoint /home/shared/outputs/diffusion_policy/sonic_htd/best_model/checkpoint.pt \
+  --device cuda:0 \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -125,7 +127,7 @@ Terminal 2, expose that websocket backend through the GR00T ZMQ PolicyServer:
 
 ```bash
 cd /home/wzh/Projects/Uni_VLaT/Isaac-GR00T
-uv run --no-sync python gr00t/eval/run_sonic_bridge_server.py \
+.venv/bin/python gr00t/eval/run_sonic_bridge_server.py \
   --backend-host 127.0.0.1 \
   --backend-port 8000 \
   --host 0.0.0.0 \
@@ -139,6 +141,7 @@ cd /home/wzh/Projects/Uni_VLaT/GR00T-WholeBodyControl
 python gear_sonic/scripts/launch_inference.py \
   --policy-host 127.0.0.1 \
   --policy-port 5550 \
+  --policy-timeout-ms 60000 \
   --camera-host 192.168.123.164 \
   --tactile-zmq-host 192.168.123.164 \
   --prompt "move the bucket to the next stool"
@@ -148,6 +151,7 @@ For `sonic_notactile`, add `--no-use-tactile` to the launcher. HTD and JEPA
 checkpoints require a fresh `uint8[768]` tactile frame. The bridge rejects any
 backend whose state, image, action, horizon, tactile requirement, or protocol
 metadata does not match `sonic_vla_v1`.
+The verified HTD best checkpoint runs on one 24 GB RTX 4090.
 
 ## Test
 

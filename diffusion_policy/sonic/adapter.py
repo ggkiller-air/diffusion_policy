@@ -96,7 +96,7 @@ class SonicPolicyAdapter:
     def infer(self, observation: Mapping[str, Any]) -> dict[str, np.ndarray]:
         obs = validate_observation(observation, requires_tactile=self.requires_tactile)
         batch = {
-            "state": torch.from_numpy(obs["state"]).unsqueeze(0).to(self.device),
+            "state": torch.from_numpy(obs["state"].copy()).unsqueeze(0).to(self.device),
             "images": torch.stack(
                 [self._image_tensor(obs[key]) for key in VIDEO_KEYS], dim=0
             )
@@ -110,7 +110,7 @@ class SonicPolicyAdapter:
         }
         if self.requires_tactile:
             batch["tactile"] = (
-                torch.from_numpy(obs["tactile"]).unsqueeze(0).to(self.device)
+                torch.from_numpy(obs["tactile"].copy()).unsqueeze(0).to(self.device)
             )
         actions = self.policy.predict_actions(batch)[0].cpu().numpy().astype(np.float32)
         if (
